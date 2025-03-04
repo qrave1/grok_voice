@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
+	"grok_voice/internal/domain"
+
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jmoiron/sqlx"
 	"github.com/pion/webrtc/v3"
@@ -27,8 +29,8 @@ const (
 	MsgTypeUnmute          = "unmute"
 	MsgTypeSetVolume       = "set_volume"
 	MsgTypeGetParticipants = "get_participants"
-	MsgTypeCreateRoom      = "create_room" // Новый тип для создания комнаты
-	MsgTypeError           = "error"
+	//MsgTypeCreateRoom      = "create_room" // Новый тип для создания комнаты
+	MsgTypeError = "error"
 )
 
 const (
@@ -43,8 +45,8 @@ var (
 	db        *sqlx.DB
 )
 
-// WebSocketMessageDTO — structure for WebSocket messages
-type WebSocketMessageDTO struct {
+// WebSocketMessage — structure for WebSocket messages
+type WebSocketMessage struct {
 	Type           string                     `json:"type"`
 	RoomID         string                     `json:"roomId,omitempty"`
 	ClientID       string                     `json:"clientId,omitempty"`
@@ -56,43 +58,13 @@ type WebSocketMessageDTO struct {
 	Message        string                     `json:"message,omitempty"`
 }
 
-// User — user structure
-type User struct {
-	ID       int    `db:"id"`
-	Username string `db:"username"`
-	Password string `db:"password"`
-}
-
-// Room — room structure
-type Room struct {
-	ID      string
-	Clients map[string]*Client
-	Mu      sync.Mutex
-}
-
-// Client — client structure
-type Client struct {
-	ID             string
-	Room           *Room
-	PeerConnection *webrtc.PeerConnection
-	Conn           *websocket.Conn
-	MutedClients   map[string]bool
-	VolumeSettings map[string]float64
-	Mu             sync.Mutex
-	UserID         int
-}
-
 // Server — server structure
 type Server struct {
-	Rooms   map[string]*Room
-	RoomsMu sync.Mutex
 }
 
 // NewServer — create a new server instance
 func NewServer() *Server {
-	return &Server{
-		Rooms: make(map[string]*Room),
-	}
+	return &Server{}
 }
 
 // initDB — initialize database connection
@@ -109,109 +81,29 @@ func initDB() {
 
 	db.MustExec(
 		`
-		CREATE TABLE IF NOT EXISTS users (
-			id SERIAL PRIMARY KEY,
-			username VARCHAR(255) UNIQUE NOT NULL,
-			password VARCHAR(255) NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS rooms (
-			id VARCHAR(255) PRIMARY KEY,
-			owner_id INT REFERENCES users(id)
-		);
+			CREATE TABLE IF NOT EXISTS users
+			(
+			    id       UUID PRIMARY KEY,
+			    username VARCHAR(255) UNIQUE NOT NULL,
+			    password VARCHAR(255)        NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS rooms
+			(
+			    id       UUID PRIMARY KEY,
+			    owner_id UUID REFERENCES users (id),
+			    name     VARCHAR(255) NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS user_rooms
+			(
+			    user_id UUID REFERENCES users (id) ON DELETE CASCADE,
+			    room_id UUID REFERENCES rooms (id) ON DELETE CASCADE,
+			    PRIMARY KEY (user_id, room_id)
+			);
 	`,
 	)
 	slog.Info("Database initialized")
-}
-
-// NewRoom — create a new room
-func NewRoom(id string) *Room {
-	return &Room{
-		ID:      id,
-		Clients: make(map[string]*Client),
-	}
-}
-
-// AddClient — add client to the room
-func (r *Room) AddClient(client *Client) {
-	r.Mu.Lock()
-	defer r.Mu.Unlock()
-	r.Clients[client.ID] = client
-	slog.Info("Client added to room", "clientID", client.ID, "roomID", r.ID)
-}
-
-// RemoveClient — remove client from the room
-func (r *Room) RemoveClient(clientID string) {
-	r.Mu.Lock()
-	defer r.Mu.Unlock()
-	delete(r.Clients, clientID)
-	slog.Info("Client removed from room", "clientID", clientID, "roomID", r.ID)
-}
-
-// GetClients — get all clients in the room
-func (r *Room) GetClients() map[string]*Client {
-	r.Mu.Lock()
-	defer r.Mu.Unlock()
-	clients := make(map[string]*Client)
-	for id, client := range r.Clients {
-		clients[id] = client
-	}
-	return clients
-}
-
-// NewClient — create a new client
-func NewClient(id string, room *Room, conn *websocket.Conn, userID int) *Client {
-	return &Client{
-		ID:             id,
-		Room:           room,
-		Conn:           conn,
-		MutedClients:   make(map[string]bool),
-		VolumeSettings: make(map[string]float64),
-		UserID:         userID,
-	}
-}
-
-// MuteClient — mute a specific client
-func (c *Client) MuteClient(clientID string) {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	c.MutedClients[clientID] = true
-	slog.Info("Client muted", "clientID", c.ID, "targetClientID", clientID)
-}
-
-// UnmuteClient — unmute a specific client
-func (c *Client) UnmuteClient(clientID string) {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	delete(c.MutedClients, clientID)
-	slog.Info("Client unmuted", "clientID", c.ID, "targetClientID", clientID)
-}
-
-// SetVolume — set volume for a specific client
-func (c *Client) SetVolume(clientID string, volume float64) {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	if volume < 0 || volume > 1 {
-		return
-	}
-	c.VolumeSettings[clientID] = volume
-	slog.Info("Volume set", "clientID", c.ID, "targetClientID", clientID, "volume", volume)
-}
-
-// IsMuted — check if a client is muted
-func (c *Client) IsMuted(clientID string) bool {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	return c.MutedClients[clientID]
-}
-
-// GetVolume — get volume for a client
-func (c *Client) GetVolume(clientID string) float64 {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	if volume, exists := c.VolumeSettings[clientID]; exists {
-		return volume
-	}
-	return 1.0
 }
 
 // createPeerConnection — create WebRTC PeerConnection
@@ -260,8 +152,8 @@ func addICECandidate(pc *webrtc.PeerConnection, candidate webrtc.ICECandidateIni
 }
 
 // forwardTrack — forward audio track to other clients
-func forwardTrack(sender *Client, track *webrtc.TrackRemote) {
-	clients := sender.Room.GetClients()
+func forwardTrack(sender *domain.Client, track *webrtc.TrackRemote, room *domain.Room) {
+	clients := room.GetClients()
 	for id, client := range clients {
 		if id == sender.ID || client.PeerConnection == nil {
 			continue
@@ -273,7 +165,11 @@ func forwardTrack(sender *Client, track *webrtc.TrackRemote) {
 		volume := client.GetVolume(sender.ID)
 		slog.Info("Forwarding track", "from", sender.ID, "to", id, "volume", volume)
 
-		localTrack, err := webrtc.NewTrackLocalStaticRTP(track.Codec().RTPCodecCapability, "audio", "stream_"+sender.ID)
+		localTrack, err := webrtc.NewTrackLocalStaticRTP(
+			track.Codec().RTPCodecCapability,
+			"audio",
+			"stream_"+sender.ID.String(),
+		)
 		if err != nil {
 			slog.Error("create local track", "error", err)
 			continue
@@ -305,7 +201,7 @@ func forwardTrack(sender *Client, track *webrtc.TrackRemote) {
 }
 
 // generateJWT — generate JWT token
-func generateJWT(userID int) (string, error) {
+func generateJWT(userID uuid.UUID) (string, error) {
 	token := jwt.NewWithClaims(
 		jwt.SigningMethodHS256, jwt.MapClaims{
 			"user_id": userID,
@@ -357,20 +253,22 @@ func registerUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID int
-	err = db.QueryRow(
-		"INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id",
-		creds.Username,
-		hashedPassword,
-	).Scan(&userID)
-	if err != nil {
-		slog.Error("register user", "error", err)
-		http.Error(w, "User already exists or database error", http.StatusConflict)
-		return
-	}
+	user := domain.NewUser(creds.Username, string(hashedPassword))
+
+	// TODO перенести в репо + UC
+	//err = db.QueryRow(
+	//	"INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id",
+	//	creds.Username,
+	//	hashedPassword,
+	//).Scan(&userID)
+	//if err != nil {
+	//	slog.Error("register user", "error", err)
+	//	http.Error(w, "User already exists or database error", http.StatusConflict)
+	//	return
+	//}
 	slog.Info("User registered", "username", creds.Username)
 
-	token, err := generateJWT(userID)
+	token, err := generateJWT(user.ID)
 	if err != nil {
 		http.Error(w, "generate token", http.StatusInternalServerError)
 		return
@@ -402,26 +300,27 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var user User
-	err := db.Get(&user, "SELECT * FROM users WHERE username=$1", creds.Username)
-	if err != nil {
-		slog.Error("User not found", "username", creds.Username, "error", err)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err != nil {
-		slog.Error("Invalid password", "username", creds.Username)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-		return
-	}
-
-	token, err := generateJWT(user.ID)
-	if err != nil {
-		http.Error(w, "generate token", http.StatusInternalServerError)
-		return
-	}
-	slog.Info("User logged in", "username", creds.Username)
+	// TODO перенести в UC
+	//var user domain.User
+	//err := db.Get(&user, "SELECT * FROM users WHERE username=$1", creds.Username)
+	//if err != nil {
+	//	slog.Error("User not found", "username", creds.Username, "error", err)
+	//	http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+	//	return
+	//}
+	//
+	//if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err != nil {
+	//	slog.Error("Invalid password", "username", creds.Username)
+	//	http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+	//	return
+	//}
+	//
+	//token, err := generateJWT(user.ID)
+	//if err != nil {
+	//	http.Error(w, "generate token", http.StatusInternalServerError)
+	//	return
+	//}
+	//slog.Info("User logged in", "username", creds.Username)
 
 	http.SetCookie(
 		w, &http.Cookie{
@@ -454,18 +353,15 @@ func RoomsList(w http.ResponseWriter, r *http.Request) {
 			slog.Error("scan room", "error", err)
 			continue
 		}
-
 	}
 
 	json.NewEncoder(w).Encode(rooms)
 }
 
-// переделать под REST
-
-// createRoomViaWebSocket — create room via WebSocket
-func (s *Server) createRoomViaWebSocket(client *Client, msg WebSocketMessageDTO) (WebSocketMessageDTO, error) {
+// TODO переделать под REST
+func (s *Server) createRoomViaWebSocket(client *Client, msg WebSocketMessage) (WebSocketMessage, error) {
 	if msg.RoomID == "" {
-		return WebSocketMessageDTO{Type: MsgTypeError, Message: "Missing roomId"}, nil
+		return WebSocketMessage{Type: MsgTypeError, Message: "Missing roomId"}, nil
 	}
 
 	_, err := db.Exec(
@@ -475,7 +371,7 @@ func (s *Server) createRoomViaWebSocket(client *Client, msg WebSocketMessageDTO)
 	)
 	if err != nil {
 		slog.Error("create room", "roomID", msg.RoomID, "error", err)
-		return WebSocketMessageDTO{Type: MsgTypeError, Message: "create room"}, nil
+		return WebSocketMessage{Type: MsgTypeError, Message: "create room"}, nil
 	}
 	slog.Info("Permanent room created", "roomID", msg.RoomID, "ownerID", client.UserID)
 
@@ -483,14 +379,14 @@ func (s *Server) createRoomViaWebSocket(client *Client, msg WebSocketMessageDTO)
 	s.Rooms[msg.RoomID] = NewRoom(msg.RoomID)
 	s.RoomsMu.Unlock()
 
-	return WebSocketMessageDTO{Type: "room_created", Message: "Room created successfully"}, nil
+	return WebSocketMessage{Type: "room_created", Message: "Room created successfully"}, nil
 }
 
 // handleSignaling — handle WebSocket signaling messages
-func (s *Server) handleSignaling(client *Client, msg WebSocketMessageDTO) (WebSocketMessageDTO, error) {
+func (s *Server) handleSignaling(client *Client, msg WebSocketMessage) (WebSocketMessage, error) {
 	switch msg.Type {
-	case MsgTypeCreateRoom:
-		return s.createRoomViaWebSocket(client, msg)
+	//case MsgTypeCreateRoom:
+	//	return s.createRoomViaWebSocket(client, msg)
 
 	case MsgTypeJoin:
 		s.RoomsMu.Lock()
@@ -507,13 +403,13 @@ func (s *Server) handleSignaling(client *Client, msg WebSocketMessageDTO) (WebSo
 		for id := range clients {
 			participants = append(participants, id)
 		}
-		return WebSocketMessageDTO{Type: "participants", Participants: participants}, nil
+		return WebSocketMessage{Type: "participants", Participants: participants}, nil
 
 	case MsgTypeOffer:
 		if client.PeerConnection == nil {
 			pc, err := createPeerConnection()
 			if err != nil {
-				return WebSocketMessageDTO{
+				return WebSocketMessage{
 					Type:    MsgTypeError,
 					Message: "create connection: " + err.Error(),
 				}, nil
@@ -532,7 +428,7 @@ func (s *Server) handleSignaling(client *Client, msg WebSocketMessageDTO) (WebSo
 					if c != nil {
 						slog.Info("Sending ICE candidate", "candidate", c.ToJSON())
 						if err := client.Conn.WriteJSON(
-							WebSocketMessageDTO{
+							WebSocketMessage{
 								Type: MsgTypeCandidate,
 								// TODO костылик временно
 								Candidate: func() *webrtc.ICECandidateInit {
@@ -549,31 +445,31 @@ func (s *Server) handleSignaling(client *Client, msg WebSocketMessageDTO) (WebSo
 		}
 		answer, err := handleOffer(client.PeerConnection, *msg.SDP)
 		if err != nil {
-			return WebSocketMessageDTO{Type: MsgTypeError, Message: "process offer: " + err.Error()}, nil
+			return WebSocketMessage{Type: MsgTypeError, Message: "process offer: " + err.Error()}, nil
 		}
-		return WebSocketMessageDTO{Type: "answer", SDP: &answer}, nil
+		return WebSocketMessage{Type: "answer", SDP: &answer}, nil
 
 	case MsgTypeCandidate:
 		if client.PeerConnection == nil {
-			return WebSocketMessageDTO{Type: MsgTypeError, Message: "PeerConnection not initialized"}, nil
+			return WebSocketMessage{Type: MsgTypeError, Message: "PeerConnection not initialized"}, nil
 		}
 		if err := addICECandidate(client.PeerConnection, *msg.Candidate); err != nil {
-			return WebSocketMessageDTO{Type: MsgTypeError, Message: "add candidate: " + err.Error()}, nil
+			return WebSocketMessage{Type: MsgTypeError, Message: "add candidate: " + err.Error()}, nil
 		}
-		return WebSocketMessageDTO{}, nil
+		return WebSocketMessage{}, nil
 
 	case MsgTypeMute:
 		client.MuteClient(msg.TargetClientID)
-		return WebSocketMessageDTO{Type: "mute_ack"}, nil
+		return WebSocketMessage{Type: "mute_ack"}, nil
 
 	case MsgTypeUnmute:
 		client.UnmuteClient(msg.TargetClientID)
-		return WebSocketMessageDTO{Type: "unmute_ack"}, nil
+		return WebSocketMessage{Type: "unmute_ack"}, nil
 
 	case MsgTypeSetVolume:
 		if msg.Volume != nil {
 			client.SetVolume(msg.TargetClientID, *msg.Volume)
-			return WebSocketMessageDTO{Type: "volume_ack"}, nil
+			return WebSocketMessage{Type: "volume_ack"}, nil
 		}
 
 	case MsgTypeGetParticipants:
@@ -582,9 +478,9 @@ func (s *Server) handleSignaling(client *Client, msg WebSocketMessageDTO) (WebSo
 		for id := range clients {
 			participants = append(participants, id)
 		}
-		return WebSocketMessageDTO{Type: "participants", Participants: participants}, nil
+		return WebSocketMessage{Type: "participants", Participants: participants}, nil
 	}
-	return WebSocketMessageDTO{}, nil
+	return WebSocketMessage{}, nil
 }
 
 // handleWebSocket — handle WebSocket connections
@@ -597,26 +493,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Read initial message
-	var msg WebSocketMessageDTO
+	var msg WebSocketMessage
 	if err := conn.ReadJSON(&msg); err != nil {
 		slog.Error("read initial message", "error", err)
 		return
 	}
 
 	// Allow only "join" or "create_room" as initial message
-	if msg.Type != MsgTypeJoin && msg.Type != MsgTypeCreateRoom {
-		conn.WriteJSON(WebSocketMessageDTO{Type: MsgTypeError, Message: "Invalid initial message type"})
-		return
-	}
-
-	// Handle "create_room" message
-	if msg.Type == MsgTypeCreateRoom {
-		resp, err := s.createRoomViaWebSocket(nil, msg)
-		if err != nil {
-			conn.WriteJSON(WebSocketMessageDTO{Type: MsgTypeError, Message: err.Error()})
-			return
-		}
-		conn.WriteJSON(resp)
+	if msg.Type != MsgTypeJoin {
+		conn.WriteJSON(WebSocketMessage{Type: MsgTypeError, Message: "Invalid initial message type"})
 		return
 	}
 
@@ -631,7 +516,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	userID, ok := r.Context().Value(userIdContextKey).(int)
 	if !ok {
-		conn.WriteJSON(WebSocketMessageDTO{Type: MsgTypeError, Message: "User ID not found"})
+		conn.WriteJSON(WebSocketMessage{Type: MsgTypeError, Message: "User ID not found"})
 		return
 	}
 
@@ -641,14 +526,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	response, err := s.handleSignaling(client, msg)
 	if err != nil {
-		conn.WriteJSON(WebSocketMessageDTO{Type: MsgTypeError, Message: err.Error()})
+		conn.WriteJSON(WebSocketMessage{Type: MsgTypeError, Message: err.Error()})
 		return
 	}
 	conn.WriteJSON(response)
 
 	// Main message loop
 	for {
-		var innerMsg WebSocketMessageDTO
+		var innerMsg WebSocketMessage
 		if err := conn.ReadJSON(&innerMsg); err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				slog.Error("read message", "error", err)
@@ -657,7 +542,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		response, err := s.handleSignaling(client, innerMsg)
 		if err != nil {
-			conn.WriteJSON(WebSocketMessageDTO{Type: MsgTypeError, Message: err.Error()})
+			conn.WriteJSON(WebSocketMessage{Type: MsgTypeError, Message: err.Error()})
 			continue
 		}
 		if response.Type != "" {
@@ -667,7 +552,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // cleanupClient — cleanup client on disconnect
-func (s *Server) cleanupClient(client *Client, roomID string) {
+func (s *Server) cleanupClient(client *domain.Client, roomID string) {
 	if client.PeerConnection != nil {
 		client.PeerConnection.Close()
 	}
