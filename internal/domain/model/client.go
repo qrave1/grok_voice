@@ -1,4 +1,4 @@
-package domain
+package model
 
 import (
 	"log/slog"
@@ -8,6 +8,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 )
+
+// TODO переделать Client в Session, в котором будут wsConn и WebRTC conn
 
 // Client — client structure
 type Client struct {

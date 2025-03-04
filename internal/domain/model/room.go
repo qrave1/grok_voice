@@ -1,8 +1,7 @@
-package domain
+package model
 
 import (
 	"log/slog"
-	"sync"
 
 	"github.com/google/uuid"
 )
@@ -11,10 +10,6 @@ type Room struct {
 	ID      uuid.UUID
 	OwnerID uuid.UUID
 	Name    string
-
-	// Активные клиенты в комнате
-	clients map[uuid.UUID]*Client
-	mu      sync.RWMutex
 }
 
 // NewRoom — create a new room
