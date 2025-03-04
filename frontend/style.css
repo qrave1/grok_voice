@@ -1,0 +1,108 @@
+/* Общие стили и темное оформление */
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background-color: #2f3136;
+    color: #fff;
+}
+
+/* Стили для экрана авторизации */
+.auth-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+.auth-form {
+    background-color: #202225;
+    padding: 20px;
+    border-radius: 8px;
+    width: 300px;
+}
+.auth-form h2 {
+    margin-top: 0;
+    text-align: center;
+}
+.auth-form input {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: none;
+    border-radius: 4px;
+}
+.auth-form button {
+    width: 100%;
+    padding: 10px;
+    background-color: #7289da;
+    border: none;
+    color: white;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.auth-form button:hover {
+    background-color: #5b6eae;
+}
+.auth-form p {
+    text-align: center;
+}
+
+/* Стили для главного экрана: три колонки */
+.main-container {
+    display: flex;
+    height: 100vh;
+}
+
+/* Левая колонка: список комнат */
+.rooms-list {
+    width: 250px;
+    background-color: #202225;
+    padding: 20px;
+    overflow-y: auto;
+}
+.rooms-list h2 {
+    margin-top: 0;
+}
+.room-item {
+    padding: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 10px;
+    background-color: #2f3136;
+}
+.room-item:hover {
+    background-color: #36393f;
+}
+.room-item.active {
+    background-color: #7289da;
+}
+
+/* Центральная колонка: участники */
+.participants {
+    flex: 1;
+    padding: 20px;
+    background-color: #292b2f;
+    overflow-y: auto;
+}
+.participants h2 {
+    margin-top: 0;
+}
+.participant-item {
+    padding: 8px;
+    margin-bottom: 8px;
+    background-color: #36393f;
+    border-radius: 4px;
+}
+
+/* Правая колонка: информация о комнате */
+.room-info {
+    width: 250px;
+    background-color: #202225;
+    padding: 20px;
+    overflow-y: auto;
+}
+.room-info h2 {
+    margin-top: 0;
+}
+.room-info p, .room-info ul {
+    margin: 10px 0;
+}

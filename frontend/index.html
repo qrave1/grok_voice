@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Voice Chat Client</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Alpine.js для реактивности -->
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+<body x-data="app()">
+<!-- Вид авторизации (логин/регистрация) -->
+<div x-show="view === 'auth'" class="auth-container">
+    <template x-if="authMode === 'login'">
+        <div class="auth-form">
+            <h2>Вход</h2>
+            <input type="text" x-model="username" placeholder="Имя пользователя">
+            <input type="password" x-model="password" placeholder="Пароль">
+            <button @click="login()">Войти</button>
+            <p>Нет аккаунта? <a href="#" @click.prevent="authMode = 'register'">Зарегистрироваться</a></p>
+        </div>
+    </template>
+    <template x-if="authMode === 'register'">
+        <div class="auth-form">
+            <h2>Регистрация</h2>
+            <input type="text" x-model="username" placeholder="Имя пользователя">
+            <input type="password" x-model="password" placeholder="Пароль">
+            <button @click="register()">Зарегистрироваться</button>
+            <p>Есть аккаунт? <a href="#" @click.prevent="authMode = 'login'">Войти</a></p>
+        </div>
+    </template>
+</div>
+
+<!-- Главный вид: три колонки -->
+<div x-show="view === 'main'" class="main-container">
+    <!-- Левая колонка: список комнат -->
+    <aside class="rooms-list">
+        <h2>Комнаты</h2>
+        <template x-if="rooms.length === 0">
+            <p>Комнат нет</p>
+        </template>
+        <template x-for="room in rooms" :key="room.id">
+            <div class="room-item" @click="selectRoom(room)"
+                 :class="{ active: selectedRoom && selectedRoom.id === room.id }">
+                <p x-text="room.name ? room.name : room.id"></p>
+            </div>
+        </template>
+        <button @click="fetchRooms()">Обновить список</button>
+    </aside>
+
+    <!-- Центральная колонка: список участников выбранной комнаты -->
+    <section class="participants">
+        <h2>Участники</h2>
+        <template x-if="selectedRoom === null">
+            <p>Выберите комнату для подключения</p>
+        </template>
+        <template x-if="selectedRoom">
+            <template x-if="participants.length === 0">
+                <p>Пока нет участников</p>
+            </template>
+            <template x-for="participant in participants" :key="participant">
+                <div class="participant-item" x-text="participant"></div>
+            </template>
+        </template>
+    </section>
+
+    <!-- Правая колонка: информация о комнате -->
+    <aside class="room-info">
+        <template x-if="selectedRoom">
+            <div>
+                <h2>Информация о комнате</h2>
+                <p><strong>ID:</strong> <span x-text="selectedRoom.id"></span></p>
+                <p><strong>Создатель:</strong> <span x-text="selectedRoom.creator"></span></p>
+                <h3>Участники</h3>
+                <template x-if="participants.length === 0">
+                    <p>Нет участников</p>
+                </template>
+                <ul>
+                    <template x-for="p in participants" :key="p">
+                        <li x-text="p"></li>
+                    </template>
+                </ul>
+            </div>
+        </template>
+        <template x-if="!selectedRoom">
+            <p>Выберите комнату для просмотра информации</p>
+        </template>
+    </aside>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
